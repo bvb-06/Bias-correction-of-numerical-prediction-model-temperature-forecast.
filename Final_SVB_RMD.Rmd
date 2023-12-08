@@ -1,0 +1,409 @@
+---
+title: "Mini_Project"
+author: "Vaishnavi Mada, Srujani Mareddy, Bharath Badri Venkata"
+date: "2023-12-04"
+output:
+  word_document: default
+  html_document: default
+---
+
+# **Loading Data.** 
+<br>
+
+```{r}
+
+library(readr)
+library(dplyr)
+#load data
+data <- read_csv("Bias_correction_ucl.csv")
+str(data)
+```
+
+# **Data Preprocessing Data.** 
+<br>
+
+
+```{r}
+#check number of null values
+sum(is.na(data))
+#remove data with null values
+data <- na.omit(data)
+sum(is.na(data))
+data <- data %>% rename(Solar_radiation = 'Solar radiation')
+data <- subset(data, select = -Next_Tmin)
+head(data,3)
+```
+
+# **Train/Validation/Test Split.** 
+<br>
+
+Dividing the data into three sections. Consider the first 60% for training (Train), the following 20% for validation (Valid), and the final 20% for testing (Test) based on the date.
+
+<br>
+```{r}
+data$Date <- as.Date(data$Date, format="%d-%m-%Y")
+
+# Sort the data based on the "Date" column
+data <- data[order(data$Date), ]
+
+# Create LDAPS_CC column
+data$LDAPS_CC <- rowMeans(data[, c("LDAPS_CC1", "LDAPS_CC2", "LDAPS_CC3", "LDAPS_CC4")], na.rm = TRUE)
+
+# Create LDAPS_PPT column
+data$LDAPS_PPT <- rowMeans(data[, c("LDAPS_PPT1", "LDAPS_PPT2", "LDAPS_PPT3", "LDAPS_PPT4")],na.rm=TRUE)
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Calculate the number of rows for each set
+total_rows <- nrow(data)
+train_rows <- round(0.6 * total_rows)
+valid_rows <- round(0.2 * total_rows)
+
+# Create indices for training, validation, and test sets
+trainIndex <- 1:train_rows
+validIndex <- (train_rows + 1):(train_rows + valid_rows)
+testIndex <- (train_rows + valid_rows + 1):total_rows
+
+# Split the data
+train <- data[trainIndex, ]
+valid <- data[validIndex, ]
+test <- data[testIndex, ]
+
+# Print the number of rows in each set
+cat("Number of rows in training set:", nrow(train), "\n")
+cat("Number of rows in validation set:", nrow(valid), "\n")
+cat("Number of rows in test set:", nrow(test), "\n")
+
+
+# Remove variables that should not be used as predictors
+train <- subset(train, select=-c(station, Date))
+valid <- subset(valid, select=-c(station, Date))
+test <- subset(test, select=-c(station, Date))
+head(train,3)
+head(valid,3)
+head(test,3)
+
+```
+
+# **Initial Linear Regression Model.**
+<br>
+
+
+```{r}
+# Fit the linear model
+init_model <- lm(Next_Tmax ~ ., data = train)
+
+# Model predictions on the validation set
+valid$Tmax_pred <- predict(init_model, newdata = valid)
+
+# Check the size of the validation set
+validsize <- nrow(valid)
+validsize
+
+x<-valid$Next_Tmax - valid$Tmax_pred
+filtered_x <- x[is.finite(x)]
+sum(filtered_x^2)
+
+rmse_valid <- sqrt((sum((filtered_x)^2))/validsize)
+rmse_valid
+
+# Model summary
+summary(init_model)
+
+```
+
+
+The root mean square error (RMSE) for the validation set is defined as: <br>
+
+$\begin{equation} RMSE_{Valid} = \sqrt{\frac{1}{|SizeofValid set|} \sum_{i \in Valid} (Y_i - \hat{Y}_i)^2} \end{equation}$
+
+
+
+The initial model has an RMSE of $1.51259$ on the validation set. The model uses all variables as predictors. Many variables seem insignificant based on the p-values.
+
+```{r}
+# Linear regression plot
+plot(init_model, which = c(1, 2))
+```
+
+The residuals plot shows the difference between the observed values of a dependent variable and the values predicted by an independent variable. Ideally, residuals should be randomly spread around the line of zero residuals, indicating that there is no pattern to the residuals.
+
+The Q-Q plot is another way to check for normality. Theoretical quantiles are plotted along the x-axis and the observed quantiles are plotted along the y-axis. The plot should follow the diagonal line if the residuals are normally distributed.
+
+In both cases, deviations from the expected pattern may indicate problems with the model or the underlying assumptions. It's important to remember that these are just diagnostic tools, and it's up to the analyst to determine whether the deviations from the expected pattern are concerning or not.
+
+As for the Residuals vs Fitted plot, this is a way to assess the linearity assumption of the model. Ideally, the points would form a straight line, indicating that the model's assumptions are valid.
+
+```{r}
+# Create a data frame for actual and predicted values
+actual_vs_pred_init <- data.frame(Actual = valid$Next_Tmax, Predicted = valid$Tmax_pred)
+
+# Scatter plot
+plot(actual_vs_pred_init, pch = 19, col = "blue", main = "Actual vs Predicted (Initial Model)", xlab = "Actual", ylab = "Predicted")
+abline(0, 1, col = "red", lwd = 2)  # Add a diagonal line for reference
+
+```
+
+The plot "Actual vs Predicted (Initial Model)" represents the difference between the actual and predicted values for the same points. This is an essential metric to evaluate the performance of a predictive model, as it shows how well the model can predict future data points.
+
+The residuals, or the difference between the actual and predicted values, are displayed in a bar graph. Negative residuals indicate that the actual value is lower than the predicted value, while positive residuals indicate that the actual value is higher than the predicted value.
+
+The plots suggest that the initial model does not accurately predict the actual values. For example, the model predicts a value of 35 for the first point, but the actual value is 25. The residuals in the plot provide a visual representation of these errors.
+
+To improve the model's accuracy, you could consider adjusting the model's parameters, using a different model, or incorporating more features into the model.
+
+
+
+# **Correlation Analysis** 
+<br>
+
+
+```{r}
+# Perform feature selection based on correlation analysis
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+
+# Install and load the corrplot package
+install.packages("corrplot")
+library(corrplot)
+# Calculate the correlation matrix
+cor_matrix <- cor(train)
+
+# Plot the correlation matrix as a heatmap
+corrplot(cor_matrix, method = "color", type = "upper", order = "hclust", tl.col = "black", tl.srt = 70)
+```
+
+As the correlation between some independent variables is high tried to remove the correlations. And the correlation between the dependent variable and some independent  variables is how, tried to increase the correlation by scaling the features.
+
+
+# **Improved Model** 
+<br>
+
+Now try to improve the model by removing some insignificant variables, transforming variables, and creating interactions:
+
+```{r}
+# Fit the model with the new variable
+imp_model <- lm(Next_Tmax ~ 
+                  Present_Tmax +
+                  sqrt(LDAPS_RHmax) +
+                  LDAPS_Tmax_lapse +
+                  LDAPS_CC+
+                  LDAPS_WS +
+                  LDAPS_PPT+
+                  LDAPS_LH +
+                  lat +
+                  lon +
+                  log(Solar_radiation)+
+                  DEM+
+                  Slope,
+                data = train)
+# After fitting the model, you can use the following lines for the remaining calculations
+valid$Tmax_pred <- predict(imp_model, valid)   
+z <- valid$Next_Tmax - valid$Tmax_pred
+filtered_z <- z[is.finite(z)]
+sum(filtered_z^2)
+# Calculate RMSE on the validation set
+rmse_valid <- sqrt((sum((filtered_z)^2))/validsize)
+rmse_valid
+
+summary(imp_model)
+```
+```{r}
+# Linear regression plot for the improved model
+plot(imp_model, which = c(1, 2))
+```
+
+
+The first plot is the residuals plot. The residuals are the differences between the observed values (Tmax Present_Tmax) and the fitted values (predicted values). The idea here is to see if the model is accurately capturing the patterns in the data. In a well-fit model, the residuals should be randomly distributed around the horizontal line at 0.
+
+The second plot is the standardized residuals plot. The standardized residuals are obtained by dividing the residuals by the estimated standard deviation of the error. The reason we look at standardized residuals is because it makes it easier to compare different models, regardless of the scale of the data.
+
+The third plot is the Q-Q plot. The Q-Q plot, also known as the quantile-quantile plot, is used to assess if the residuals of a model follow a specific distribution, such as normality. The data points on the Q-Q plot should be roughly on a straight line. If they deviate from the line, it may indicate that the residuals do not follow the expected distribution.
+
+The residuals vs fitted values plot can also be used to assess the fit of a model. The closer the points are to the line of identity (the line that connects the top-left corner with the bottom-right corner), the better the fit of the model.
+
+Finally, the last plot is the scale-location plot. This plot compares the quantiles of the residuals with the quantiles of a normal distribution. A well-fit model should show a plot that resembles a straight line, as it means that the residuals follow a normal distribution.
+
+```{r}
+# Create a data frame for actual and predicted values
+actual_vs_pred_improved <- data.frame(Actual = valid$Next_Tmax, Predicted = valid$Tmax_pred)
+
+# Scatter plot
+plot(actual_vs_pred_improved, pch = 19, col = "green", main = "Actual vs Predicted (Improved Model)", xlab = "Actual", ylab = "Predicted")
+abline(0, 1, col = "red", lwd = 2)  # Add a diagonal line for reference
+
+```
+
+
+The plots showcase the differences between the actual values and the predicted values of the time series. In both plots, the x-axis represents the time (from past to present) and the y-axis represents the value of the time series.
+
+In the "Actual vs Predicted (Original Model)" plot, the points are not on a straight line. This suggests that the original model does not accurately predict the values of the time series. For example, when the actual value is 35, the predicted value by the original model is 30, indicating an underestimation of 5.
+
+On the other hand, the "Actual vs Predicted (Improved Model)" plot shows that the points are much closer to the straight line, which indicates a significant improvement in the accuracy of the predictions. For example, when the actual value is 35, the predicted value by the improved model is 35, indicating an accurate prediction.
+
+To sum up, the improvement in the model's accuracy can be observed from the plots, where the points in the "Actual vs Predicted (Improved Model)" plot are much closer to the straight line compared to the "Actual vs Predicted (Original Model)" plot.
+
+
+
+1.  *Next_Tmax (Response Variable):*
+
+    -   **Description:** The maximum air temperature for the next day.
+
+    -   **Reason:** This is the variable we want to predict.
+
+2.  *Present_Tmax:*
+
+    -   **Description:** The maximum air temperature for the present day.
+
+    -   **Reason:** The current day's maximum temperature is likely to influence the temperature on the next day.
+
+3.  *sqrt(LDAPS_RHmax):*
+
+    -   **Description:** The square root of the maximum relative humidity from the LDAPS (Land Data Assimilation System) model.
+
+    -   **Reason:** The square root transformation may be applied to stabilize variance or improve linearity in the relationship with the response variable.
+
+4.  *LDAPS_Tmax_lapse:*
+
+    -   **Description:** Temperature lapse rate from the LDAPS model.
+
+    -   **Reason:** Lapse rate represents the rate at which temperature decreases with an increase in altitude. It may provide insights into the atmospheric conditions affecting temperature.
+
+5.  *LDAPS_CC:*
+
+    -   **Description:** Average cloud cover from the LDAPS model.
+
+    -   **Reason:** Cloud cover can influence the incoming solar radiation, which in turn affects temperature. Including this variable captures the impact of cloudiness.
+
+6.  *LDAPS_WS:*
+
+    -   **Description:** Wind speed from the LDAPS model.
+
+    -   **Reason:** Wind speed can affect the mixing of air masses and thus influence temperature. Including this variable accounts for the impact of wind.
+
+7.  *LDAPS_PPT:*
+
+    -   **Description:** Average precipitation from the LDAPS model.
+
+    -   **Reason:** Precipitation can cool the atmosphere and the surface. Including this variable accounts for the impact of rainfall on temperature.
+
+8.  *LDAPS_LH:*
+
+    -   **Description:** Latent heat flux from the LDAPS model.
+
+    -   **Reason:** Latent heat flux represents the energy released or absorbed during phase changes (e.g., evaporation). It can influence temperature dynamics.
+
+9.  *lat:*
+
+    -   **Description:** Latitude of the location.
+
+    -   **Reason:** Latitude affects the angle of solar radiation, which can influence temperature patterns.
+
+10. *lon:*
+
+    -   **Description:** Longitude of the location.
+
+    -   **Reason:** Longitude can affect local time and thus the timing of temperature variations.
+
+11. *log(Solar_radiation):*
+
+    -   **Description:** Logarithm of solar radiation.
+
+    -   **Reason:** Taking the logarithm may be done to handle the skewed distribution of solar radiation and improve model performance.
+
+12. *DEM:*
+
+    -   **Description:** Digital Elevation Model.
+
+    -   **Reason:** Elevation can impact temperature. Higher elevations tend to be cooler, so including DEM captures the effect of elevation on temperature.
+
+13. *Slope:*
+
+    -   **Description:** The slope of the terrain.
+
+    -   **Reason:** The slope of the land can affect local microclimates and temperature variations.
+
+In summary, the variables in the improved model include a combination of meteorological variables (temperature, humidity, wind, precipitation), geographic location (latitude, longitude, elevation), and terrain characteristics (slope). The selection is based on the understanding that these factors collectively contribute to the variation in the maximum air temperature. The inclusion of transformed variables (e.g., square root of relative humidity, logarithm of solar radiation) indicates an attempt to capture non-linear relationships and improve model fit.
+
+## **Correlation Analysis and Plots.** 
+<br>
+
+In the correlation matrix for the improved shows the correlation between the variables. Earlier the correlation of cloud cover was seemed to be high so we tried to remove the negative correlation between target label and the cloud cover by taking the average and keeping it as LDAPS_CC.
+
+Also the LDAPS_PPT's had a higher negative correlation earlier with the target label so we tried to remove that by taking mean of all those as LDAPS_PPT.
+
+A model should not have independent variables with higher correlation with each other which might effect the performance of the model. So removing the features which are more correlated like  Present_Tmin, LDAPS_Tmin_lapse  with a correlation score of 0.7036 and LDAPS_CC2  has a higher correlation of  0.736 with LDAPS_RHmin.
+```{r}
+#options(repos = c(CRAN = "https://cran.rstudio.com"))
+
+# Install and load the corrplot package
+#install.packages("corrplot")
+#library(corrplot)
+
+# Specify the columns for which you want to calculate correlations
+selected_columns <- c(
+  "Next_Tmax",
+  "Present_Tmax",
+  "LDAPS_RHmax",
+  "LDAPS_Tmax_lapse",
+  "LDAPS_CC",
+  "LDAPS_WS",
+  "LDAPS_PPT",
+  "LDAPS_LH",
+  "lat",
+  "lon",
+  "Solar_radiation",
+  "DEM",
+  "Slope"
+)
+
+
+# Subset the training data to include only the selected columns
+selected_train <- train[selected_columns]
+
+# Calculate the correlation matrix for the selected columns
+cor_matrix_selected <- cor(selected_train)
+
+# Plot the correlation matrix as a heatmap
+corrplot(
+  cor_matrix_selected,
+  method = "color",
+  type = "upper",
+  order = "hclust",
+  tl.col = "black",
+  tl.srt = 70
+)
+```
+
+The improved model has an RMSE of $1.473355$ on the validation set, better than the initial model.
+
+# **Model Evaluation on Test Set.** 
+<br>
+
+The root mean square error (RMSE) for the test set is defined as:
+
+$\begin{equation} RMSE_{Test} = \sqrt{\frac{1}{|Size of Test set|}\sum_{i \in Test} (Y_i - \hat{Y}_i)^2} \end{equation}$
+
+```{r}
+# Evaluate the initial and improved models on the test set
+testsize<-nrow(test)
+testsize
+```
+
+```{r}
+
+# Initial model
+test$Tmax_pred_init <- predict(init_model, test)   
+rmse_test_init <- sqrt(sum((test$Next_Tmax - test$Tmax_pred_init)^2)/testsize)
+rmse_test_init
+```
+
+```{r}
+
+# Improved model
+test$Tmax_pred_improved <- predict(imp_model, test)
+rmse_test_improved <- sqrt(sum((test$Next_Tmax - test$Tmax_pred_improved)^2)/testsize) 
+rmse_test_improved
+```
+
+The performance of the Initial model and Improved model on the test set has been performed and the RMSE values for the initial model is $1.64787$ and for the improved model is $1.629505$. Clearly we can observe that the improved model performs better on the test set.
